@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Fall back to stderr when today's log file cannot be opened, instead of dropping every line. A later day's file that cannot be opened sends its lines to stderr as well.
+
 ## 0.2.0
 
 - Rename the repository to `app-internals` and make it a workspace of crates that share one version and one tag. `app-update` moves to `crates/update` with its history.

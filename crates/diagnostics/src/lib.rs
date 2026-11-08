@@ -23,7 +23,9 @@ pub const MAX_LOG_DAYS: usize = 7;
 ///
 /// Logs go to daily files in `dir`, named after `prefix`. `RUST_LOG` sets the
 /// filter when it is set, and `default_filter`, such as `"info"`, otherwise.
-/// When `dir` is `None` or cannot be created, logs go to stderr instead.
+/// When `dir` is `None`, cannot be created, or today's file cannot be opened,
+/// logs go to stderr instead. So does a line written after a later day's file
+/// fails to open.
 ///
 /// Returns the folder the log files go to, when file logging is set up.
 pub fn init(dir: Option<&Path>, prefix: &str, default_filter: &str) -> Option<PathBuf> {
@@ -32,13 +34,20 @@ pub fn init(dir: Option<&Path>, prefix: &str, default_filter: &str) -> Option<Pa
             .or_else(|_| EnvFilter::try_new(default_filter))
             .unwrap_or_else(|_| EnvFilter::new("info"))
     };
-    let dir = dir.filter(|dir| fs::create_dir_all(dir).is_ok());
-    if let Some(dir) = dir {
-        prune_old_logs(dir, prefix);
+    // Today's file is opened here, before choosing where logs go, so a file
+    // that cannot be opened falls back to stderr instead of losing every line.
+    let writer = dir
+        .filter(|dir| fs::create_dir_all(dir).is_ok())
+        .and_then(|dir| {
+            prune_old_logs(dir, prefix);
+            DailyWriter::open(dir.to_owned(), prefix.to_owned(), today()).ok()
+        });
+    let logs = writer.as_ref().map(DailyWriter::dir);
+    if let Some(writer) = writer {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter())
             .with_ansi(false)
-            .with_writer(DailyWriter::new(dir.to_owned(), prefix.to_owned()))
+            .with_writer(writer)
             .try_init();
     } else {
         let _ = tracing_subscriber::fmt()
@@ -47,7 +56,7 @@ pub fn init(dir: Option<&Path>, prefix: &str, default_filter: &str) -> Option<Pa
             .try_init();
     }
     install_panic_hook();
-    dir.map(Path::to_owned)
+    logs
 }
 
 fn install_panic_hook() {
@@ -109,14 +118,24 @@ struct WriterState {
 }
 
 impl DailyWriter {
-    fn new(dir: PathBuf, prefix: String) -> Self {
-        Self(Arc::new(Mutex::new(WriterState {
+    /// A writer with `date`'s file already open.
+    fn open(dir: PathBuf, prefix: String, date: String) -> io::Result<Self> {
+        let mut state = WriterState {
             dir,
             prefix,
             date: String::new(),
             file: None,
             bytes: 0,
-        })))
+        };
+        state.switch_to(date)?;
+        Ok(Self(Arc::new(Mutex::new(state))))
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.0.lock().map_or_else(
+            |poisoned| poisoned.into_inner().dir.clone(),
+            |state| state.dir.clone(),
+        )
     }
 }
 
@@ -129,14 +148,22 @@ impl<'a> MakeWriter<'a> for DailyWriter {
 }
 
 impl WriterState {
+    /// Opens `date`'s file for appending and makes it the current one.
+    fn switch_to(&mut self, date: String) -> io::Result<()> {
+        let path = self.dir.join(log_name(&self.prefix, &date));
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        self.bytes = file.metadata()?.len();
+        self.file = Some(file);
+        self.date = date;
+        prune_old_logs(&self.dir, &self.prefix);
+        Ok(())
+    }
+
     fn write(&mut self, date: String, buffer: &[u8]) -> io::Result<usize> {
-        if self.date != date {
-            let path = self.dir.join(log_name(&self.prefix, &date));
-            let file = OpenOptions::new().create(true).append(true).open(path)?;
-            self.bytes = file.metadata()?.len();
-            self.file = Some(file);
-            self.date = date;
-            prune_old_logs(&self.dir, &self.prefix);
+        // A new day's file that cannot be opened sends the line to stderr, and
+        // the next line tries to open it again.
+        if self.date != date && self.switch_to(date).is_err() {
+            return io::stderr().write(buffer);
         }
         let remaining =
             usize::try_from(MAX_LOG_BYTES.saturating_sub(self.bytes)).unwrap_or(usize::MAX);
@@ -213,6 +240,21 @@ mod tests {
         expected.push(log_name("other", "2026-07-01"));
         expected.sort();
         assert_eq!(left, expected);
+    }
+
+    #[test]
+    fn a_log_file_that_cannot_be_opened_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        // A folder where today's file should be cannot be opened as a file.
+        fs::create_dir(dir.path().join(log_name("app", "2026-07-01"))).unwrap();
+        assert!(
+            DailyWriter::open(
+                dir.path().to_owned(),
+                "app".to_owned(),
+                "2026-07-01".to_owned()
+            )
+            .is_err()
+        );
     }
 
     #[test]
