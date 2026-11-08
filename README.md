@@ -1,17 +1,24 @@
-# app-update
+# app-internals
 
-[![CI](https://github.com/handsomefox/app-update/actions/workflows/ci.yml/badge.svg)](https://github.com/handsomefox/app-update/actions/workflows/ci.yml)
+[![CI](https://github.com/handsomefox/app-internals/actions/workflows/ci.yml/badge.svg)](https://github.com/handsomefox/app-internals/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A Rust library that updates a desktop app from its own GitHub releases. It checks for a newer release, shows its notes, downloads the archive for the running platform, verifies it, and swaps in the new executable on restart.
-
-It updates these apps:
+Rust crates that these desktop apps share, so none of them keeps its own copy:
 
 - [DLSS Updater](https://github.com/handsomefox/dlss-updater)
 - [Elden Ring Save Guard](https://github.com/handsomefox/eldenring-backuptool)
 - [osu!lazer Cleaner](https://github.com/handsomefox/osu-lazer-cleaner)
 - [Windows Cleaner](https://github.com/handsomefox/win-cleaner)
 - [Windows Toolkit](https://github.com/handsomefox/win-toolkit)
+
+| Crate | Folder | What it does |
+| --- | --- | --- |
+| `app-update` | `crates/update` | Updates the app from its own GitHub releases. It checks for a newer release, downloads the archive for the running platform, verifies it, and swaps in the new executable on restart. |
+| `app-update-ui` | `crates/update-ui` | The egui content of the "App updates" dialog and the header chip's text. Each app keeps its own window and look. |
+| `app-diagnostics` | `crates/diagnostics` | Daily log files with a 10 MiB daily cap, seven days kept, and a panic hook that logs the panic. |
+| `app-folders` | `crates/folders` | The Windows known folders, with an environment fallback, the app's own data folder, and opening a folder in the system file manager. |
+
+Every crate has the same version, and one tag releases all of them.
 
 ## What an update checks
 
@@ -31,17 +38,28 @@ The layout is a contract with every installed copy of an app. Renaming any part 
 
 ## Use it
 
-Add it from this repository, pinned to a tag:
+Add the crates from this repository, pinned to a tag. Every crate an app uses takes the same tag:
 
 ```toml
 [dependencies]
-app-update = { git = "https://github.com/handsomefox/app-update", tag = "v0.1.0", version = "=0.1.0" }
+app-update = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
+app-update-ui = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
+app-diagnostics = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
+app-folders = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
+```
+
+Start logging first, so a failure while the window opens still reaches the log:
+
+```rust
+let logs = app_folders::app_data_dir("win-toolkit").map(|dir| dir.join("logs"));
+app_diagnostics::init(logs.as_deref(), "win-toolkit", "info");
 ```
 
 Create one `Updater` for the window, call `poll` once per frame, and restart after the event loop ends:
 
 ```rust
 const APP_INFO: app_update::AppInfo = app_update::AppInfo {
+    name: "Windows Toolkit",
     owner: "handsomefox",
     repo: "win-toolkit",
     bin: "win-toolkit",
@@ -55,15 +73,12 @@ let mut updater = app_update::Updater::new(APP_INFO, move || ctx.request_repaint
 // Each frame. `Settings` holds the check period and the skipped version;
 // persist it with the app's own state.
 updater.poll(&mut settings);
-if let Some(release) = updater.notification(&settings) {
-    // Offer `release.version` and the notes of `updater.update()`.
-}
 
 // After the event loop has ended and the app's state is saved:
 app_update::restart_if_requested()?;
 ```
 
-`check_now`, `download`, `install_and_restart`, `skip`, and `dismiss` drive the rest of the flow from the app's own buttons.
+`app-update-ui` draws the dialog's content inside the app's own window, through a `Look` that the app implements for its colors, spacing, icons, and buttons. The app runs the `Action` it returns with `app_update_ui::apply`.
 
 ## Test an update by hand
 
@@ -73,11 +88,11 @@ Debug builds read `APP_UPDATE_PRETEND_VERSION` as the running version. Run a deb
 
 ```sh
 cargo fmt --all -- --check
-cargo test --all-targets --locked
-cargo clippy --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-CI runs the tests and Clippy on Ubuntu and Windows, plus `cargo machete`, `cargo audit`, actionlint, shellcheck, and zizmor.
+CI runs the tests and Clippy on Ubuntu and Windows, plus `cargo machete`, `cargo audit`, actionlint, and zizmor. It calls the same shared workflow as the apps, from [handsomefox/app-workflows](https://github.com/handsomefox/app-workflows).
 
 ## License
 
