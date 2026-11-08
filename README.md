@@ -42,10 +42,10 @@ Add the crates from this repository, pinned to a tag. Every crate an app uses ta
 
 ```toml
 [dependencies]
-app-update = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
-app-update-ui = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
-app-diagnostics = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
-app-folders = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.0", version = "=0.2.0" }
+app-update = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.1", version = "=0.2.1" }
+app-update-ui = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.1", version = "=0.2.1" }
+app-diagnostics = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.1", version = "=0.2.1" }
+app-folders = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.1", version = "=0.2.1" }
 ```
 
 Start logging first, so a failure while the window opens still reaches the log:
