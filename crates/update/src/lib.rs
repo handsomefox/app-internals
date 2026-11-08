@@ -11,7 +11,7 @@
 //! The archive layout is a contract with every installed copy of the app:
 //! `<bin>-<version>-<platform>.zip` (or `.tar.gz` on Linux) holding
 //! `<bin>-<version>-<platform>/<bin>[.exe]`, next to a `SHA256SUMS` asset.
-//! Each app's `scripts/package-release.sh` writes exactly that.
+//! The shared release workflow in `handsomefox/app-workflows` writes exactly that.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,8 @@ const BACKUP_SUFFIXES: [&str; 4] = ["old", "old1", "old2", "old3"];
 /// Which app is updating, and where its releases are.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppInfo {
+    /// The app's name as users see it, such as "Windows Toolkit".
+    pub name: &'static str,
     /// The GitHub account that owns the repository.
     pub owner: &'static str,
     /// The repository name.
@@ -62,7 +64,7 @@ impl AppInfo {
     }
 }
 
-/// The release platform this build runs on, named as `package-release.sh`
+/// The release platform this build runs on, named as the release workflow
 /// names it, or `None` where no release is published.
 #[must_use]
 pub const fn platform() -> Option<&'static str> {
@@ -1315,6 +1317,7 @@ mod tests {
     use std::net::TcpListener;
 
     const APP: AppInfo = AppInfo {
+        name: "Test App",
         owner: "owner",
         repo: "repo",
         bin: "tool",

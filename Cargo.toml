@@ -1,41 +1,47 @@
-[package]
-name = "app-update"
-version = "0.1.0"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+# One version and one tag cover every crate here, so each app moves all of them at once.
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Self-update for desktop apps from their GitHub releases: check, verify, stage, and swap in the new executable"
-repository = "https://github.com/handsomefox/app-update"
-readme = "README.md"
-keywords = ["self-update", "updater", "github-releases"]
-categories = ["development-tools"]
+repository = "https://github.com/handsomefox/app-internals"
 publish = false
 
 # Version requirements here are minimums, not exact pins. Each app pins every
-# dependency exactly and commits its Cargo.lock, so exact pins in this library
-# would make every dependency bump in an app wait for a release of this crate.
-[dependencies]
+# dependency exactly and commits its Cargo.lock, so exact pins in these crates
+# would make every dependency bump in an app wait for a release here.
+#
+# Each app links one copy of every dependency below, so a feature added here
+# turns on in all five apps. Keep each feature list exactly as the apps use it.
+[workspace.dependencies]
+app-update = { path = "crates/update", version = "=0.2.0" }
+egui = { version = "0.37.0", default-features = false }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+jiff = "0.2.38"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
 # reqwest's `rustls-no-provider` feature deliberately selects no crypto backend;
 # this direct dependency exposes ring, which `Client` installs once.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 sha2 = "0.11.1"
 tar = { version = "0.4.46", default-features = false }
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 zip = { version = "9.2.0", default-features = false, features = ["deflate"] }
 
-[dev-dependencies]
-serde_json = "1.0.154"
-tempfile = "3.27.0"
-
-[lints.rust]
+[workspace.lints.rust]
 unreachable_pub = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_qualifications = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
