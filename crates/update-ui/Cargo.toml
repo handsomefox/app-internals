@@ -1,0 +1,16 @@
+[package]
+name = "app-update-ui"
+description = "The app updates dialog and header chip around app-update, shared by every app and styled by each"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+app-update.workspace = true
+egui.workspace = true
+
+[lints]
+workspace = true
