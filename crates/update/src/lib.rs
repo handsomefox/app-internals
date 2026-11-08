@@ -1718,6 +1718,34 @@ mod tests {
         assert!(!directory.path().join("tool.exe.old").exists());
     }
 
+    // Windows refuses to rename a file another handle holds open without
+    // FILE_SHARE_DELETE, which fails the swap after the running executable has
+    // already been renamed aside. Unix has no such lock to borrow.
+    #[cfg(windows)]
+    #[test]
+    fn install_puts_the_executable_back_when_the_swap_fails() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        /// `FILE_SHARE_READ`: the hash check may read the staged file, but
+        /// nothing may rename or delete it while this handle is open.
+        const SHARE_READ_ONLY: u32 = 0x1;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tool.exe");
+        fs::write(&executable, b"old program").unwrap();
+        let staged = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        let lock = fs::File::options()
+            .read(true)
+            .share_mode(SHARE_READ_ONLY)
+            .open(&staged.path)
+            .unwrap();
+
+        assert!(matches!(install(&staged, &executable), Err(Error::Io(_))));
+        drop(lock);
+        assert_eq!(fs::read(&executable).unwrap(), b"old program");
+        assert!(!directory.path().join("tool.exe.old").exists());
+        assert_eq!(fs::read(&staged.path).unwrap(), b"new program");
+    }
+
     #[test]
     fn leftovers_are_removed_by_exact_name_only() {
         let directory = tempfile::tempdir().unwrap();
