@@ -1,25 +1,49 @@
 [package]
 name = "app-update"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Self-update for desktop apps from their GitHub releases: check, verify, stage, and swap in the new executable"
+repository = "https://github.com/handsomefox/app-update"
+readme = "README.md"
+keywords = ["self-update", "updater", "github-releases"]
+categories = ["development-tools"]
+publish = false
 
-[lints]
-workspace = true
-
+# Version requirements here are minimums, not exact pins. Each app pins every
+# dependency exactly and commits its Cargo.lock, so exact pins in this library
+# would make every dependency bump in an app wait for a release of this crate.
 [dependencies]
-flate2.workspace = true
-reqwest.workspace = true
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
 # reqwest's `rustls-no-provider` feature deliberately selects no crypto backend;
 # this direct dependency exposes ring, which `Client` installs once.
-rustls.workspace = true
-serde.workspace = true
-sha2.workspace = true
-tar.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-zip.workspace = true
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.1"
+tar = { version = "0.4.46", default-features = false }
+thiserror = "2.0.21"
+tracing = "0.1.44"
+zip = { version = "9.2.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-serde_json.workspace = true
-tempfile.workspace = true
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+
+[lints.rust]
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+exit = "warn"
+multiple_unsafe_ops_per_block = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"

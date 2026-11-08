@@ -11,9 +11,7 @@
 //! The archive layout is a contract with every installed copy of the app:
 //! `<bin>-<version>-<platform>.zip` (or `.tar.gz` on Linux) holding
 //! `<bin>-<version>-<platform>/<bin>[.exe]`, next to a `SHA256SUMS` asset.
-//! `scripts/package-release.sh` writes exactly that.
-//!
-//! This file is identical in every app. Copy a change to all of them.
+//! Each app's `scripts/package-release.sh` writes exactly that.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
