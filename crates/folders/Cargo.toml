@@ -1,0 +1,15 @@
+[package]
+name = "app-folders"
+description = "The user folders a desktop app keeps its files in, and opening a folder in the system file manager"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[lints]
+workspace = true
