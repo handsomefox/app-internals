@@ -1,0 +1,20 @@
+[package]
+name = "app-diagnostics"
+description = "Daily log files with a size cap and a panic hook, so a desktop app's failures can be read after the fact"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+jiff.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
