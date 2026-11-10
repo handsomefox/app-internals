@@ -17,6 +17,7 @@ Rust crates that these desktop apps share, so none of them keeps its own copy:
 | `app-update-ui` | `crates/update-ui` | The egui content of the "App updates" dialog and the header chip's text. Each app keeps its own window and look. |
 | `app-diagnostics` | `crates/diagnostics` | Daily log files with a 10 MiB daily cap, seven days kept, and a panic hook that logs the panic. |
 | `app-folders` | `crates/folders` | The Windows known folders, with an environment fallback, the app's own data folder, and opening a folder in the system file manager. |
+| `app-process` | `crates/process` | Whether a process with a given executable name is running. It finds processes by name only and never opens a handle to one. |
 
 Every crate has the same version, and one tag releases all of them.
 

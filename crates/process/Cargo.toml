@@ -1,0 +1,15 @@
+[package]
+name = "app-process"
+description = "Whether a process with a given executable name is running, found by name only"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[lints]
+workspace = true

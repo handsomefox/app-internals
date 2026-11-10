@@ -51,6 +51,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-process"
+version = "0.2.1"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "app-update"
 version = "0.2.1"
 dependencies = [
