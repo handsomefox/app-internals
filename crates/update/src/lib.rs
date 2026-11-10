@@ -38,6 +38,12 @@ const PRETEND_VERSION_VAR: &str = "APP_UPDATE_PRETEND_VERSION";
 /// Names the swap leaves beside the executable: the staged update, then the
 /// replaced executable. A replaced executable that is still running cannot be
 /// deleted, so later updates fall back to numbered names.
+///
+/// Each download is staged under its own `<exe>.new-<pid>-<nonce>` name, and
+/// the copy of the app that downloaded it holds a lock on it until it
+/// installs. Another copy starting up therefore never deletes or truncates a
+/// download that is still waiting. Versions before 0.2.2 staged to a plain
+/// `<exe>.new`, which startup still removes.
 const STAGED_SUFFIX: &str = "new";
 const BACKUP_SUFFIXES: [&str; 4] = ["old", "old1", "old2", "old3"];
 
@@ -703,8 +709,20 @@ impl Client {
         &self,
         release: &Release,
         executable: &Path,
-        mut progress: impl FnMut(u64, Option<u64>),
+        progress: impl FnMut(u64, Option<u64>),
     ) -> Result<Staged, Error> {
+        self.download_held(release, executable, progress)
+            .map(|held| held.staged)
+    }
+
+    /// [`Client::download`], keeping the lock that marks the staged file as
+    /// this process's.
+    fn download_held(
+        &self,
+        release: &Release,
+        executable: &Path,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<Held, Error> {
         let platform = platform().ok_or(Error::NoBuild)?;
         let (Some(archive), Some(sums)) = (&release.archive, &release.sums) else {
             return Err(Error::NoBuild);
@@ -737,9 +755,9 @@ impl Client {
         if !looks_executable(&program, platform) {
             return Err(Error::NotExecutable);
         }
-        let staged = stage(executable, &program, release.version)?;
-        tracing::info!(release = %release.tag, path = %staged.path.display(), "app update staged");
-        Ok(staged)
+        let held = stage(executable, &program, release.version)?;
+        tracing::info!(release = %release.tag, path = %held.staged.path.display(), "app update staged");
+        Ok(held)
     }
 
     fn fetch(
@@ -813,27 +831,74 @@ fn success(response: reqwest::blocking::Response) -> Result<reqwest::blocking::R
     })
 }
 
-fn stage(executable: &Path, program: &[u8], version: Version) -> Result<Staged, Error> {
-    let path = sibling(executable, STAGED_SUFFIX);
+/// A staged download and the lock that marks it as this process's.
+///
+/// While `lock` is held, [`remove_leftovers`] in another copy of the app
+/// leaves the file alone. The lock is released by dropping it.
+struct Held {
+    staged: Staged,
+    lock: Option<fs::File>,
+}
+
+impl Held {
+    /// Takes the lock on a staged file again, after an install that failed
+    /// released it. Without the lock the file is still installable, only no
+    /// longer protected from another copy's startup cleanup.
+    fn relock(&mut self) {
+        let locked = fs::File::open(&self.staged.path).and_then(|file| {
+            file.try_lock().map_err(io::Error::from)?;
+            Ok(file)
+        });
+        match locked {
+            Ok(file) => self.lock = Some(file),
+            Err(error) => {
+                tracing::warn!(path = %self.staged.path.display(), %error, "could not lock the staged update again");
+            }
+        }
+    }
+}
+
+/// A name for one staged download, unique to this process and moment.
+fn staged_name() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!("{STAGED_SUFFIX}-{}-{nanos:x}", std::process::id())
+}
+
+fn stage(executable: &Path, program: &[u8], version: Version) -> Result<Held, Error> {
+    let path = sibling(executable, &staged_name());
     // Opened for writing so `sync_all` can flush: Windows refuses to flush a
-    // read-only handle.
+    // read-only handle. `create_new` refuses to reuse another download's file.
     let mut file = fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .open(&path)?;
-    file.write_all(program)?;
-    file.sync_all()?;
-    drop(file);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+    let written = (|| {
+        file.lock()?;
+        file.write_all(program)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        }
+        Ok::<_, io::Error>(())
+    })();
+    if let Err(error) = written {
+        drop(file);
+        if let Err(remove) = fs::remove_file(&path) {
+            tracing::warn!(path = %path.display(), %remove, "could not remove a partly staged update");
+        }
+        return Err(error.into());
     }
-    Ok(Staged {
-        version,
-        path,
-        sha256: Sha256::digest(program).into(),
+    Ok(Held {
+        staged: Staged {
+            version,
+            path,
+            sha256: Sha256::digest(program).into(),
+        },
+        lock: Some(file),
     })
 }
 
@@ -896,18 +961,70 @@ pub fn install(staged: &Staged, executable: &Path) -> Result<(), Error> {
 }
 
 /// Deletes what earlier updates left beside `executable`. A file that is
-/// still in use stays until a later start.
+/// still in use stays until a later start, and so does a staged download that
+/// another running copy of the app still holds.
 pub fn remove_leftovers(executable: &Path) {
     for suffix in std::iter::once(STAGED_SUFFIX).chain(BACKUP_SUFFIXES) {
-        let path = sibling(executable, suffix);
-        match fs::remove_file(&path) {
-            Ok(()) => tracing::info!(path = %path.display(), "removed update leftover"),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "update leftover still in use");
-            }
+        remove_leftover(&sibling(executable, suffix));
+    }
+    for path in staged_downloads(executable) {
+        remove_unheld(&path);
+    }
+}
+
+fn remove_leftover(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => tracing::info!(path = %path.display(), "removed update leftover"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::debug!(path = %path.display(), %error, "update leftover still in use");
         }
     }
+}
+
+/// The `<exe>.new-*` downloads beside `executable`.
+fn staged_downloads(executable: &Path) -> Vec<PathBuf> {
+    let (Some(directory), Some(name)) = (executable.parent(), executable.file_name()) else {
+        return Vec::new();
+    };
+    let mut prefix = name.to_os_string();
+    prefix.push(format!(".{STAGED_SUFFIX}-"));
+    let Some(prefix) = prefix.to_str() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Removes a staged download unless a running copy of the app holds its
+/// lock. Deleting does not wait for a byte-range lock on Windows, so the lock
+/// is taken here first and held across the delete.
+fn remove_unheld(path: &Path) {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => {
+            tracing::debug!(path = %path.display(), %error, "staged update still in use");
+            return;
+        }
+    };
+    if let Err(error) = file.try_lock() {
+        tracing::info!(path = %path.display(), %error, "staged update held by another running copy");
+        return;
+    }
+    remove_leftover(path);
+    drop(file);
 }
 
 static RESTART: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -953,7 +1070,7 @@ pub fn restart_if_requested() -> io::Result<()> {
 enum Message {
     Checked(Result<Option<Box<Update>>, String>),
     Progress(u64, Option<u64>),
-    Downloaded(Result<Staged, String>),
+    Downloaded(Result<Held, String>),
 }
 
 /// The background work an [`Updater`] runs. One runs at a time.
@@ -974,7 +1091,7 @@ enum Found {
     /// latest one, once downloaded and verified.
     Newer {
         update: Box<Update>,
-        staged: Option<Staged>,
+        staged: Option<Held>,
     },
 }
 
@@ -988,12 +1105,12 @@ impl Found {
 
     fn staged(&self) -> Option<&Staged> {
         match self {
-            Self::Newer { staged, .. } => staged.as_ref(),
+            Self::Newer { staged, .. } => staged.as_ref().map(|held| &held.staged),
             Self::NotChecked | Self::UpToDate => None,
         }
     }
 
-    fn take_staged(&mut self) -> Option<Staged> {
+    fn take_staged(&mut self) -> Option<Held> {
         match self {
             Self::Newer { staged, .. } => staged.take(),
             Self::NotChecked | Self::UpToDate => None,
@@ -1146,10 +1263,10 @@ impl Updater {
                             self.error = None;
                             // A download stays staged only while it is still
                             // the latest release.
-                            let staged = self.found.take_staged().filter(|staged| {
-                                update
-                                    .as_ref()
-                                    .is_some_and(|update| update.latest.version == staged.version)
+                            let staged = self.found.take_staged().filter(|held| {
+                                update.as_ref().is_some_and(|update| {
+                                    update.latest.version == held.staged.version
+                                })
                             });
                             self.found = match update {
                                 Some(update) => Found::Newer { update, staged },
@@ -1254,7 +1371,7 @@ impl Updater {
         self.spawn("update-download", move || {
             let mut last_report = 0;
             let result = client
-                .download(&release, &executable, |received, total| {
+                .download_held(&release, &executable, |received, total| {
                     // A report per 256 KiB keeps the bar moving without
                     // waking the UI for every network read.
                     if received == 0 || received - last_report >= 256 * 1024 {
@@ -1278,16 +1395,26 @@ impl Updater {
     /// # Errors
     /// Returns a message when nothing is staged or the swap fails.
     pub fn install_and_restart(&mut self) -> Result<(), String> {
-        let (Some(staged), Some(executable)) = (self.found.staged(), &self.executable) else {
+        let Some(executable) = self.executable.clone() else {
             return Err("No downloaded update is waiting to be installed.".to_owned());
         };
-        if let Err(error) = install(staged, executable) {
+        let Some(mut held) = self.found.take_staged() else {
+            return Err("No downloaded update is waiting to be installed.".to_owned());
+        };
+        // Windows denies reading a locked range even to this process's other
+        // handles, and `install` reads the file to check its hash. That check
+        // also covers the moment between unlocking and installing.
+        held.lock = None;
+        if let Err(error) = install(&held.staged, &executable) {
+            held.relock();
+            if let Found::Newer { staged, .. } = &mut self.found {
+                *staged = Some(held);
+            }
             let message = format!("The update could not be installed: {error}");
             self.error = Some(message.clone());
             return Err(message);
         }
-        request_restart(executable);
-        self.found.take_staged();
+        request_restart(&executable);
         Ok(())
     }
 
@@ -1679,8 +1806,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("tool.exe");
         fs::write(&executable, b"old program").unwrap();
-        let staged = stage(&executable, b"new program", version("1.3.0")).unwrap();
-        assert_eq!(staged.path, directory.path().join("tool.exe.new"));
+        let staged = stage(&executable, b"new program", version("1.3.0"))
+            .unwrap()
+            .staged;
+        let name = staged.path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("tool.exe.new-"), "{name}");
         install(&staged, &executable).unwrap();
         assert_eq!(fs::read(&executable).unwrap(), b"new program");
         assert_eq!(
@@ -1690,7 +1820,9 @@ mod tests {
         assert!(!staged.path.exists());
 
         // The next update replaces the earlier leftover.
-        let staged = stage(&executable, b"newer program", version("1.4.0")).unwrap();
+        let staged = stage(&executable, b"newer program", version("1.4.0"))
+            .unwrap()
+            .staged;
         install(&staged, &executable).unwrap();
         assert_eq!(fs::read(&executable).unwrap(), b"newer program");
         assert_eq!(
@@ -1704,7 +1836,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("tool.exe");
         fs::write(&executable, b"old program").unwrap();
-        let staged = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        let staged = stage(&executable, b"new program", version("1.3.0"))
+            .unwrap()
+            .staged;
         fs::write(&staged.path, b"swapped program").unwrap();
         assert!(matches!(
             install(&staged, &executable),
@@ -1732,7 +1866,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("tool.exe");
         fs::write(&executable, b"old program").unwrap();
-        let staged = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        let staged = stage(&executable, b"new program", version("1.3.0"))
+            .unwrap()
+            .staged;
         let lock = fs::File::options()
             .read(true)
             .share_mode(SHARE_READ_ONLY)
@@ -1776,6 +1912,65 @@ mod tests {
                 "tool.exe.older"
             ]
         );
+    }
+
+    #[test]
+    fn startup_leaves_a_download_another_copy_holds_and_removes_the_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tool.exe");
+        fs::write(&executable, b"old program").unwrap();
+        // One copy of the app staged an update and still holds it.
+        let held = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        // Another copy staged one and exited without installing it.
+        let abandoned = stage(&executable, b"new program", version("1.3.0"))
+            .unwrap()
+            .staged;
+        assert_ne!(held.staged.path, abandoned.path);
+        // So did a version before 0.2.2, under the plain name.
+        let legacy = directory.path().join("tool.exe.new");
+        fs::write(&legacy, b"old staging").unwrap();
+
+        remove_leftovers(&executable);
+        assert!(held.staged.path.exists());
+        assert!(!abandoned.path.exists());
+        assert!(!legacy.exists());
+
+        // The holder can still install what it staged.
+        let staged = held.staged.clone();
+        drop(held);
+        install(&staged, &executable).unwrap();
+        assert_eq!(fs::read(&executable).unwrap(), b"new program");
+    }
+
+    #[test]
+    fn a_failed_install_keeps_the_download_held() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tool.exe");
+        fs::write(&executable, b"old program").unwrap();
+        let mut updater = Updater::new(APP, || {});
+        updater.executable = Some(executable.clone());
+        let mut held = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        // A changed file makes the install fail its hash check.
+        held.lock = None;
+        fs::write(&held.staged.path, b"swapped program").unwrap();
+        held.relock();
+        let path = held.staged.path.clone();
+        let update = select_update(
+            &APP,
+            version("1.2.3"),
+            None,
+            vec![api_release("v1.3.0", &[])],
+        );
+        updater.found = Found::Newer {
+            update: Box::new(update.unwrap()),
+            staged: Some(held),
+        };
+
+        assert!(updater.install_and_restart().is_err());
+        assert_eq!(updater.staged(), Some(version("1.3.0")));
+        remove_leftovers(&executable);
+        assert!(path.exists(), "the failed install gave up its lock");
+        assert_eq!(fs::read(&executable).unwrap(), b"old program");
     }
 
     type Route = (String, u16, Vec<u8>);
@@ -2149,10 +2344,13 @@ mod tests {
             Message::Checked(Ok(update.map(Box::new)))
         };
         let staged = || {
-            Message::Downloaded(Ok(Staged {
-                version: version("1.3.0"),
-                path: PathBuf::from("tool.new"),
-                sha256: [0; 32],
+            Message::Downloaded(Ok(Held {
+                staged: Staged {
+                    version: version("1.3.0"),
+                    path: PathBuf::from("tool.new"),
+                    sha256: [0; 32],
+                },
+                lock: None,
             }))
         };
 

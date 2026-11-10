@@ -26,7 +26,7 @@ Every crate has the same version, and one tag releases all of them.
 - It installs only from a published, non-prerelease `v<major>.<minor>.<patch>` release that is newer than the running version.
 - The archive must match its line in the release's `SHA256SUMS` asset. When GitHub records a digest for the archive, the archive must match that too. A release whose GitHub digest cannot be read is not offered.
 - Downloads are size-capped, and only links inside the app's own GitHub releases are followed.
-- The new executable is extracted next to the running one and hashed again before the swap. Windows cannot overwrite a running executable, so the swap renames the running file aside first. If the swap fails, the original is put back. The next start removes what is left.
+- The new executable is extracted next to the running one under a name of its own, and hashed again before the swap. The copy of the app that downloaded it holds a lock on it until then, so another copy starting up leaves it alone. Windows cannot overwrite a running executable, so the swap renames the running file aside first. If the swap fails, the original is put back. The next start removes what is left.
 
 ## The release layout
 
