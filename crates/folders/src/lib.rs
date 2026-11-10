@@ -108,10 +108,25 @@ pub fn open(directory: &Path) -> io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("xdg-open")
+        let mut child = std::process::Command::new("xdg-open")
             .arg(directory)
-            .spawn()
-            .map(drop)
+            .spawn()?;
+        // An unwaited child stays a zombie until the app exits. `xdg-open`
+        // hands the folder to the file manager and returns, so waiting on a
+        // thread is brief and never blocks the caller.
+        let reaper = std::thread::Builder::new()
+            .name("xdg-open-reaper".to_owned())
+            .spawn(move || match child.wait() {
+                Ok(status) if !status.success() => {
+                    tracing::warn!(%status, "xdg-open could not open the folder");
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not wait for xdg-open"),
+            });
+        if let Err(error) = reaper {
+            tracing::warn!(%error, "could not start a thread to wait for xdg-open");
+        }
+        Ok(())
     }
 }
 
