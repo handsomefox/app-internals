@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "app-diagnostics"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "jiff",
  "tempfile",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "app-folders"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "tracing",
  "windows-sys 0.61.2",
@@ -52,14 +52,14 @@ dependencies = [
 
 [[package]]
 name = "app-process"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "app-update"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "flate2",
  "reqwest",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "app-update-ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "app-update",
  "egui",

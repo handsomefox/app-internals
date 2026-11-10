@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Stage each downloaded update under its own name, and hold a lock on it until it is installed. A second copy of the app that starts while the first has an update waiting no longer deletes that download, so the first copy's install no longer fails. Startup still removes downloads that no running copy holds, and the plain `<exe>.new` that earlier versions staged.
+- Add `app-process`, which reports whether a process with a given executable name is running. It enumerates names only, through Toolhelp on Windows and `/proc` on Linux, and never opens a handle to a process.
+- Wait for `xdg-open` in the background after opening a folder on Linux, so it no longer stays behind as a zombie process until the app exits.
+
 ## 0.2.1
 
 - Fall back to stderr when today's log file cannot be opened, instead of dropping every line. A later day's file that cannot be opened sends its lines to stderr as well.
