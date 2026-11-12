@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -841,9 +841,23 @@ struct Held {
 }
 
 impl Held {
-    /// Takes the lock on a staged file again, after an install that failed
-    /// released it. Without the lock the file is still installable, only no
-    /// longer protected from another copy's startup cleanup.
+    /// Reads the staged program through the handle that holds the lock.
+    /// Windows denies reading a locked range to every other handle, even this
+    /// process's own, so the lock stays held while the file is read and
+    /// swapped in, and another copy's startup cleanup cannot delete it.
+    fn read(&mut self) -> io::Result<Vec<u8>> {
+        let Some(file) = &mut self.lock else {
+            return fs::read(&self.staged.path);
+        };
+        file.seek(SeekFrom::Start(0))?;
+        let mut program = Vec::new();
+        file.read_to_end(&mut program)?;
+        Ok(program)
+    }
+
+    /// Takes the lock on a staged file again, after it was lost. Without the
+    /// lock the file is still installable, only no longer protected from
+    /// another copy's startup cleanup.
     fn relock(&mut self) {
         let locked = fs::File::open(&self.staged.path).and_then(|file| {
             file.try_lock().map_err(io::Error::from)?;
@@ -869,8 +883,11 @@ fn staged_name() -> String {
 fn stage(executable: &Path, program: &[u8], version: Version) -> Result<Held, Error> {
     let path = sibling(executable, &staged_name());
     // Opened for writing so `sync_all` can flush: Windows refuses to flush a
-    // read-only handle. `create_new` refuses to reuse another download's file.
+    // read-only handle. Opened for reading so the install can read through
+    // the locked handle. `create_new` refuses to reuse another download's
+    // file.
     let mut file = fs::OpenOptions::new()
+        .read(true)
         .write(true)
         .create_new(true)
         .open(&path)?;
@@ -945,7 +962,13 @@ fn free_backup(executable: &Path) -> Result<PathBuf, Error> {
 /// either rename fails.
 pub fn install(staged: &Staged, executable: &Path) -> Result<(), Error> {
     let program = fs::read(&staged.path)?;
-    if <[u8; 32]>::from(Sha256::digest(&program)) != staged.sha256 {
+    swap(staged, &program, executable)
+}
+
+/// Checks `program`, the staged file's bytes as just read, against the hash
+/// recorded when it was verified, then swaps the staged file in.
+fn swap(staged: &Staged, program: &[u8], executable: &Path) -> Result<(), Error> {
+    if <[u8; 32]>::from(Sha256::digest(program)) != staged.sha256 {
         return Err(Error::StagedChanged);
     }
     let backup = free_backup(executable)?;
@@ -1414,12 +1437,14 @@ impl Updater {
         let Some(mut held) = self.found.take_staged() else {
             return Err("No downloaded update is waiting to be installed.".to_owned());
         };
-        // Windows denies reading a locked range even to this process's other
-        // handles, and `install` reads the file to check its hash. That check
-        // also covers the moment between unlocking and installing.
-        held.lock = None;
-        if let Err(error) = install(&held.staged, &executable) {
-            held.relock();
+        let installed = held
+            .read()
+            .map_err(Error::from)
+            .and_then(|program| swap(&held.staged, &program, &executable));
+        if let Err(error) = installed {
+            if held.lock.is_none() {
+                held.relock();
+            }
             if let Found::Newer { staged, .. } = &mut self.found {
                 *staged = Some(held);
             }
@@ -1427,6 +1452,7 @@ impl Updater {
             self.error = Some(message.clone());
             return Err(message);
         }
+        drop(held);
         request_restart(&executable);
         Ok(())
     }
@@ -2325,6 +2351,9 @@ mod tests {
             updater.staged().is_some()
         });
         assert_eq!(updater.error(), None);
+        // Another copy starting now leaves the download alone, and the
+        // install reads it through the lock this copy still holds.
+        remove_leftovers(&executable);
         updater.install_and_restart().unwrap();
         assert_eq!(fs::read(&executable).unwrap(), Served::program(platform));
         let restart = RESTART.lock().unwrap().take();
