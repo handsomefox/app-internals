@@ -982,7 +982,19 @@ fn remove_leftover(path: &Path) {
     }
 }
 
-/// The `<exe>.new-*` downloads beside `executable`.
+/// Whether `rest`, what follows `<exe>.new-`, has the shape [`staged_name`]
+/// gives it: a process ID, a dash, and a hex timestamp.
+fn is_staged_tail(rest: &str) -> bool {
+    rest.split_once('-').is_some_and(|(pid, nanos)| {
+        !pid.is_empty()
+            && pid.bytes().all(|byte| byte.is_ascii_digit())
+            && !nanos.is_empty()
+            && nanos.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
+/// The `<exe>.new-<pid>-<time>` downloads beside `executable`. Other files
+/// that share the prefix are not this updater's and stay.
 fn staged_downloads(executable: &Path) -> Vec<PathBuf> {
     let (Some(directory), Some(name)) = (executable.parent(), executable.file_name()) else {
         return Vec::new();
@@ -1001,7 +1013,8 @@ fn staged_downloads(executable: &Path) -> Vec<PathBuf> {
             entry
                 .file_name()
                 .to_str()
-                .is_some_and(|name| name.starts_with(prefix))
+                .and_then(|name| name.strip_prefix(prefix))
+                .is_some_and(is_staged_tail)
         })
         .map(|entry| entry.path())
         .collect()
@@ -1894,6 +1907,11 @@ mod tests {
             "tool.exe.older",
             "tool.exe.bak",
             "other.exe.old",
+            "tool.exe.new-12-1a2b",
+            "tool.exe.new-backup",
+            "tool.exe.new-12-",
+            "tool.exe.new-12-saved",
+            "tool.exe.new-x1-1a2b",
         ] {
             fs::write(directory.path().join(name), b"x").unwrap();
         }
@@ -1909,6 +1927,10 @@ mod tests {
                 "other.exe.old",
                 "tool.exe",
                 "tool.exe.bak",
+                "tool.exe.new-12-",
+                "tool.exe.new-12-saved",
+                "tool.exe.new-backup",
+                "tool.exe.new-x1-1a2b",
                 "tool.exe.older"
             ]
         );
