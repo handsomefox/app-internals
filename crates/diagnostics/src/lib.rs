@@ -77,7 +77,7 @@ fn today() -> String {
 }
 
 /// Whether `name` is one of the files [`log_name`] makes for `prefix`:
-/// `<prefix>-YYYY-MM-DD.log`.
+/// `<prefix>-YYYY-MM-DD.log`, with a date that exists.
 fn is_daily_log(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)
         .and_then(|rest| rest.strip_prefix('-'))
@@ -88,6 +88,7 @@ fn is_daily_log(name: &str, prefix: &str) -> bool {
                     4 | 7 => byte == b'-',
                     _ => byte.is_ascii_digit(),
                 })
+                && date.parse::<jiff::civil::Date>().is_ok()
         })
 }
 
@@ -238,6 +239,8 @@ mod tests {
         // Saved copies that share the prefix and extension are not daily logs.
         fs::write(dir.path().join("app-2026-07-01-saved.log"), "").unwrap();
         fs::write(dir.path().join("app-000-support.log"), "").unwrap();
+        // Nor is a name shaped like one around a date that does not exist.
+        fs::write(dir.path().join("app-0000-00-00.log"), "").unwrap();
 
         prune_old_logs(dir.path(), "app");
 
@@ -252,6 +255,7 @@ mod tests {
         expected.push("app-notes.txt".to_owned());
         expected.push("app-2026-07-01-saved.log".to_owned());
         expected.push("app-000-support.log".to_owned());
+        expected.push("app-0000-00-00.log".to_owned());
         expected.push(log_name("other", "2026-07-01"));
         expected.sort();
         assert_eq!(left, expected);
