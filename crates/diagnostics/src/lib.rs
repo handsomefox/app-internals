@@ -76,25 +76,35 @@ fn today() -> String {
     jiff::Zoned::now().strftime("%Y-%m-%d").to_string()
 }
 
+/// Whether `name` is one of the files [`log_name`] makes for `prefix`:
+/// `<prefix>-YYYY-MM-DD.log`.
+fn is_daily_log(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .and_then(|rest| rest.strip_suffix(".log"))
+        .is_some_and(|date| {
+            date.len() == 10
+                && date.bytes().enumerate().all(|(index, byte)| match index {
+                    4 | 7 => byte == b'-',
+                    _ => byte.is_ascii_digit(),
+                })
+        })
+}
+
 /// Deletes the oldest of this app's log files beyond [`MAX_LOG_DAYS`]. Dated
-/// names sort by date, and other files in the folder are left alone.
+/// names sort by date. Other files in the folder are left alone, even ones
+/// that share the prefix, such as a log the user renamed to keep.
 fn prune_old_logs(dir: &Path, prefix: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let start = format!("{prefix}-");
     let mut logs: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(&start)
-                        && Path::new(name)
-                            .extension()
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
-                })
+                .is_some_and(|name| is_daily_log(name, prefix))
         })
         .collect();
     logs.sort();
@@ -225,6 +235,9 @@ mod tests {
         }
         fs::write(dir.path().join(log_name("other", "2026-07-01")), "").unwrap();
         fs::write(dir.path().join("app-notes.txt"), "").unwrap();
+        // Saved copies that share the prefix and extension are not daily logs.
+        fs::write(dir.path().join("app-2026-07-01-saved.log"), "").unwrap();
+        fs::write(dir.path().join("app-000-support.log"), "").unwrap();
 
         prune_old_logs(dir.path(), "app");
 
@@ -237,6 +250,8 @@ mod tests {
             .map(|day| log_name("app", &format!("2026-07-{day:02}")))
             .collect();
         expected.push("app-notes.txt".to_owned());
+        expected.push("app-2026-07-01-saved.log".to_owned());
+        expected.push("app-000-support.log".to_owned());
         expected.push(log_name("other", "2026-07-01"));
         expected.sort();
         assert_eq!(left, expected);
