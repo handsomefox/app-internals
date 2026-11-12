@@ -977,6 +977,10 @@ fn free_backup(executable: &Path) -> Result<PathBuf, Error> {
 /// Swaps the staged executable into `executable`'s place. The running file
 /// is renamed aside first and put back if the swap fails.
 ///
+/// Nothing here guards the staged file against another copy of the app,
+/// whose startup cleanup may delete it, or checks whether another copy
+/// already installed an update. [`Updater::install_and_restart`] does both.
+///
 /// # Errors
 /// Returns an error when the staged file changed since it was verified, or
 /// either rename fails.
