@@ -872,6 +872,26 @@ impl Held {
     }
 }
 
+/// What tells one executable file at a path from another: an install renames
+/// a different file into place, with its own size and modification time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+fn fingerprint(path: &Path) -> Option<Fingerprint> {
+    fs::metadata(path)
+        .inspect_err(
+            |error| tracing::debug!(path = %path.display(), %error, "executable not readable"),
+        )
+        .ok()
+        .map(|metadata| Fingerprint {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+}
+
 /// A name for one staged download, unique to this process and moment.
 fn staged_name() -> String {
     let nanos = SystemTime::now()
@@ -1162,6 +1182,9 @@ pub struct Updater {
     current: Option<Version>,
     client: Option<Arc<Client>>,
     executable: Option<PathBuf>,
+    /// The executable's size and time as this copy started, to notice
+    /// another copy installing an update over it.
+    installed: Option<Fingerprint>,
     repaint: Arc<dyn Fn() + Send + Sync>,
     sender: mpsc::Sender<Message>,
     receiver: mpsc::Receiver<Message>,
@@ -1184,12 +1207,14 @@ impl Updater {
         if let Some(executable) = &executable {
             remove_leftovers(executable);
         }
+        let installed = executable.as_deref().and_then(fingerprint);
         let (sender, receiver) = mpsc::channel();
         Self {
             app,
             current: running_version(&app),
             client: None,
             executable,
+            installed,
             repaint: Arc::new(repaint),
             sender,
             receiver,
@@ -1434,6 +1459,19 @@ impl Updater {
         let Some(executable) = self.executable.clone() else {
             return Err("No downloaded update is waiting to be installed.".to_owned());
         };
+        if self.found.staged().is_none() {
+            return Err("No downloaded update is waiting to be installed.".to_owned());
+        }
+        // Another copy of the app may have installed an update since this
+        // one started. Its staged version could be older, and installing it
+        // would undo that update.
+        if fingerprint(&executable) != self.installed {
+            let message = "Another copy of the app already installed an update. \
+                           Restart the app to use it."
+                .to_owned();
+            self.error = Some(message.clone());
+            return Err(message);
+        }
         let Some(mut held) = self.found.take_staged() else {
             return Err("No downloaded update is waiting to be installed.".to_owned());
         };
@@ -1471,8 +1509,15 @@ impl Updater {
     fn with_client(app: AppInfo, client: Client, executable: PathBuf) -> Self {
         let mut updater = Self::new(app, || {});
         updater.client = Some(Arc::new(client));
-        updater.executable = Some(executable);
+        updater.run_from(executable);
         updater
+    }
+
+    /// Acts as if `executable` were the running copy, as it is now.
+    #[cfg(test)]
+    fn run_from(&mut self, executable: PathBuf) {
+        self.installed = fingerprint(&executable);
+        self.executable = Some(executable);
     }
 }
 
@@ -1996,29 +2041,57 @@ mod tests {
         let executable = directory.path().join("tool.exe");
         fs::write(&executable, b"old program").unwrap();
         let mut updater = Updater::new(APP, || {});
-        updater.executable = Some(executable.clone());
+        updater.run_from(executable.clone());
         let mut held = stage(&executable, b"new program", version("1.3.0")).unwrap();
         // A changed file makes the install fail its hash check.
         held.lock = None;
         fs::write(&held.staged.path, b"swapped program").unwrap();
         held.relock();
         let path = held.staged.path.clone();
-        let update = select_update(
-            &APP,
-            version("1.2.3"),
-            None,
-            vec![api_release("v1.3.0", &[])],
-        );
-        updater.found = Found::Newer {
-            update: Box::new(update.unwrap()),
-            staged: Some(held),
-        };
+        put_staged(&mut updater, held);
 
         assert!(updater.install_and_restart().is_err());
         assert_eq!(updater.staged(), Some(version("1.3.0")));
         remove_leftovers(&executable);
         assert!(path.exists(), "the failed install gave up its lock");
         assert_eq!(fs::read(&executable).unwrap(), b"old program");
+    }
+
+    fn put_staged(updater: &mut Updater, held: Held) {
+        let update = select_update(
+            &APP,
+            version("1.2.3"),
+            None,
+            vec![api_release(&format!("v{}", held.staged.version), &[])],
+        );
+        updater.found = Found::Newer {
+            update: Box::new(update.unwrap()),
+            staged: Some(held),
+        };
+    }
+
+    #[test]
+    fn install_and_restart_refuses_when_another_copy_installed_first() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("tool.exe");
+        fs::write(&executable, b"old program").unwrap();
+        let mut updater = Updater::new(APP, || {});
+        updater.run_from(executable.clone());
+        let held = stage(&executable, b"new program", version("1.3.0")).unwrap();
+        let path = held.staged.path.clone();
+        put_staged(&mut updater, held);
+
+        // Another copy installs a later version over the same path.
+        let other = stage(&executable, b"newest program", version("1.4.0"))
+            .unwrap()
+            .staged;
+        install(&other, &executable).unwrap();
+
+        let error = updater.install_and_restart().unwrap_err();
+        assert!(error.contains("Another copy"), "{error}");
+        assert_eq!(fs::read(&executable).unwrap(), b"newest program");
+        assert_eq!(updater.staged(), Some(version("1.3.0")));
+        assert!(path.exists());
     }
 
     type Route = (String, u16, Vec<u8>);
