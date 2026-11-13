@@ -4,7 +4,7 @@ resolver = "3"
 
 [workspace.package]
 # One version and one tag cover every crate here, so each app moves all of them at once.
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/handsomefox/app-internals"
@@ -17,7 +17,7 @@ publish = false
 # Each app links one copy of every dependency below, so a feature added here
 # turns on in all five apps. Keep each feature list exactly as the apps use it.
 [workspace.dependencies]
-app-update = { path = "crates/update", version = "=0.2.2" }
+app-update = { path = "crates/update", version = "=0.2.3" }
 egui = { version = "0.37.0", default-features = false }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 jiff = "0.2.38"
