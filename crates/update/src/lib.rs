@@ -479,19 +479,22 @@ fn select_update(
                 digest,
             };
             // A digest GitHub records but this cannot read would otherwise
-            // skip the comparison with it, so the archive is not offered.
+            // skip the comparison with it, so neither the archive nor the
+            // sums are offered with one.
+            let with_digest = |found: &ApiAsset| {
+                let digest = github_digest(found).inspect_err(|()| {
+                    tracing::warn!(
+                        release = %release.tag_name,
+                        asset = %found.name,
+                        "GitHub lists a malformed digest; the release cannot be installed"
+                    );
+                });
+                Some(asset(found, digest.ok()?))
+            };
             let archive = platform
                 .and_then(|platform| find(&archive_name(app.bin, version, platform)))
-                .and_then(|archive| {
-                    let digest = github_digest(archive).inspect_err(|()| {
-                        tracing::warn!(
-                            release = %release.tag_name,
-                            asset = %archive.name,
-                            "GitHub lists a malformed digest; the release cannot be installed"
-                        );
-                    });
-                    Some(asset(archive, digest.ok()?))
-                });
+                .and_then(&with_digest);
+            let sums = find(SUMS_ASSET).and_then(&with_digest);
             Release {
                 version,
                 page_url: format!(
@@ -506,7 +509,7 @@ fn select_update(
                     .to_owned(),
                 notes: release.body.clone().unwrap_or_default(),
                 archive,
-                sums: find(SUMS_ASSET).map(|sums| asset(sums, github_digest(sums).ok().flatten())),
+                sums,
                 tag: release.tag_name,
             }
         })
@@ -735,7 +738,11 @@ impl Client {
             return Err(Error::TooLarge);
         }
         tracing::info!(release = %release.tag, bytes = archive.size, "downloading app update");
+        let sums_digest = sums.digest;
         let sums = self.fetch(sums, MAX_SUMS_BYTES, |_, _| {})?;
+        if sums_digest.is_some_and(|digest| <[u8; 32]>::from(Sha256::digest(&sums)) != digest) {
+            return Err(Error::ChecksumMismatch);
+        }
         let expected = sums_entry(&String::from_utf8_lossy(&sums), &archive.name)
             .ok_or_else(|| Error::NotInSums(archive.name.clone()))?;
         let bytes = self.fetch(archive, MAX_ARCHIVE_BYTES, &mut progress)?;
@@ -2149,6 +2156,8 @@ mod tests {
         archive: Vec<u8>,
         sums: String,
         digest: Option<[u8; 32]>,
+        /// The digest GitHub lists for `SHA256SUMS`.
+        sums_digest: Option<[u8; 32]>,
         /// Where the release says the archive is, relative to the server.
         archive_path: String,
         listed_size: usize,
@@ -2178,8 +2187,10 @@ mod tests {
             };
             let hash: [u8; 32] = Sha256::digest(&archive).into();
             let name = archive_name(APP.bin, new, platform);
+            let sums = format!("{}  other.zip\n{}  {name}\n", "00".repeat(32), hex(&hash));
             Self {
-                sums: format!("{}  other.zip\n{}  {name}\n", "00".repeat(32), hex(&hash)),
+                sums_digest: Some(Sha256::digest(&sums).into()),
+                sums,
                 digest: Some(hash),
                 archive_path: format!("/download/v1.3.0/{name}"),
                 listed_size: archive.len(),
@@ -2187,18 +2198,29 @@ mod tests {
             }
         }
 
+        /// Serves `sums` as `SHA256SUMS`, with the digest GitHub would list
+        /// for it.
+        fn set_sums(&mut self, sums: String) {
+            self.sums_digest = Some(Sha256::digest(&sums).into());
+            self.sums = sums;
+        }
+
         /// Starts the server and returns a client for the running version
         /// 1.2.3 that talks to it.
         fn start(self, platform: &str) -> Client {
             let name = archive_name(APP.bin, version("1.3.0"), platform);
             let base = serve(|base| {
-                let digest = self.digest.map_or(String::new(), |digest| {
-                    format!(r#","digest":"sha256:{}""#, hex(&digest))
-                });
+                let listed = |digest: Option<[u8; 32]>| {
+                    digest.map_or(String::new(), |digest| {
+                        format!(r#","digest":"sha256:{}""#, hex(&digest))
+                    })
+                };
+                let digest = listed(self.digest);
+                let sums_digest = listed(self.sums_digest);
                 let releases = format!(
                     r#"[{{"tag_name":"v1.3.0","body":"- New things","published_at":"2026-10-20T00:00:00Z","assets":[
                         {{"name":"{name}","size":{size},"browser_download_url":"{base}{path}"{digest}}},
-                        {{"name":"SHA256SUMS","size":{sums_size},"browser_download_url":"{base}/download/v1.3.0/SHA256SUMS"}}]}},
+                        {{"name":"SHA256SUMS","size":{sums_size},"browser_download_url":"{base}/download/v1.3.0/SHA256SUMS"{sums_digest}}}]}},
                        {{"tag_name":"v1.2.3","assets":[]}}]"#,
                     size = self.listed_size,
                     path = self.archive_path,
@@ -2297,7 +2319,7 @@ mod tests {
         let Some(platform) = platform() else { return };
         let mut served = Served::new(platform);
         let name = archive_name(APP.bin, version("1.3.0"), platform);
-        served.sums = format!("{}  {name}\n", "11".repeat(32));
+        served.set_sums(format!("{}  {name}\n", "11".repeat(32)));
         assert!(matches!(
             check_and_download(served, platform),
             Err(Error::ChecksumMismatch)
@@ -2311,11 +2333,36 @@ mod tests {
         ));
 
         let mut served = Served::new(platform);
-        served.sums = format!("{}  {name}.sig\n", "11".repeat(32));
+        served.set_sums(format!("{}  {name}.sig\n", "11".repeat(32)));
         assert!(matches!(
             check_and_download(served, platform),
             Err(Error::NotInSums(_))
         ));
+    }
+
+    #[test]
+    fn download_rejects_sums_that_do_not_match_their_github_digest() {
+        let Some(platform) = platform() else { return };
+        // The archive's line is still right, but the file is not the one
+        // GitHub recorded.
+        let mut served = Served::new(platform);
+        served.sums = format!("{}{}  extra.zip\n", served.sums, "33".repeat(32));
+        assert!(matches!(
+            check_and_download(served, platform),
+            Err(Error::ChecksumMismatch)
+        ));
+
+        let mut served = Served::new(platform);
+        served.sums_digest = Some([0x44; 32]);
+        assert!(matches!(
+            check_and_download(served, platform),
+            Err(Error::ChecksumMismatch)
+        ));
+
+        // Without a recorded digest, only the archive's line is checked.
+        let mut served = Served::new(platform);
+        served.sums_digest = None;
+        assert!(check_and_download(served, platform).is_ok());
     }
 
     #[test]
