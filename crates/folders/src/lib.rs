@@ -91,17 +91,27 @@ pub fn reveal(directory: &Path) -> io::Result<()> {
 /// Opens an existing folder, such as a game's install folder, in the system
 /// file manager. Unlike [`reveal`], it never creates the folder.
 ///
-/// On Windows this asks the shell through `ShellExecuteW`. Spawning
-/// `explorer.exe` is unreliable: Explorer hands the path to the running shell
-/// and exits, so the launch can fail after `spawn` has already reported
-/// success. Call it from the window thread, where winit has already
-/// initialized COM for the shell extensions Explorer loads.
+/// It opens folders only. A path that is not a folder is refused before the
+/// shell sees it, so a file is never run or handed to its default program.
+///
+/// On Windows this asks the shell through `ShellExecuteW` with the `explore`
+/// verb, which only folders carry. Spawning `explorer.exe` is unreliable:
+/// Explorer hands the path to the running shell and exits, so the launch can
+/// fail after `spawn` has already reported success. Call it from the window
+/// thread, where winit has already initialized COM for the shell extensions
+/// Explorer loads.
 ///
 /// # Errors
 ///
-/// Returns the error when the path contains NUL, or the shell or `xdg-open`
-/// refuses it.
+/// Returns the error when the path is missing or not a folder, contains NUL,
+/// or the shell or `xdg-open` refuses it.
 pub fn open(directory: &Path) -> io::Result<()> {
+    if !std::fs::metadata(directory)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "only a folder can be opened in the file manager",
+        ));
+    }
     #[cfg(windows)]
     {
         windows::open(directory)
@@ -201,7 +211,9 @@ mod windows {
             ));
         }
         path.push(0);
-        let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        // `open` runs whatever a path names. `explore` is a folder verb, so a
+        // file swapped in after the check above is not run.
+        let verb: Vec<u16> = "explore\0".encode_utf16().collect();
 
         // SAFETY: both strings are NUL-terminated and outlive this synchronous
         // call, and every other argument is the documented null.
@@ -234,6 +246,21 @@ mod tests {
         if let Some(dir) = app_data_dir("some-app") {
             assert!(dir.ends_with("some-app"));
         }
+    }
+
+    #[test]
+    fn open_refuses_anything_but_a_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("run-me.bat");
+        std::fs::write(&file, b"exit 1").unwrap();
+        assert_eq!(
+            open(&file).unwrap_err().kind(),
+            io::ErrorKind::NotADirectory
+        );
+        assert_eq!(
+            open(&directory.path().join("missing")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

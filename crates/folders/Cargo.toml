@@ -14,5 +14,8 @@ windows-sys.workspace = true
 [target.'cfg(not(windows))'.dependencies]
 tracing.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

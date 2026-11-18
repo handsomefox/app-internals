@@ -46,6 +46,7 @@ dependencies = [
 name = "app-folders"
 version = "0.2.3"
 dependencies = [
+ "tempfile",
  "tracing",
  "windows-sys 0.61.2",
 ]
