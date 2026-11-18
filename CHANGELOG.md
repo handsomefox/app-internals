@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Check the downloaded `SHA256SUMS` against the digest GitHub records for it, as the archive already was. A mismatch fails the download with `Error::ChecksumMismatch`. A release whose `SHA256SUMS` digest cannot be read is not offered, as with the archive.
+- Mark the restarted executable with `app_instance::hand_off`, so the updated copy waits for the old one to release its instance lock instead of exiting as a second copy. Without the mark, an app that holds the lock would close on its next update and leave the user with no window.
+- Open only folders from `app_folders::open`. A path that is not a folder now fails with `ErrorKind::NotADirectory` before the shell sees it, and Windows opens the folder with the `explore` verb instead of `open`, so a file is never run.
+- Add `app-instance`, which keeps one running copy of an app. A second launch asks the first copy to come to the front and exits. Off Windows every launch runs as before.
+- Add `app-elevation`, which starts a program with administrator rights through the UAC prompt. It quotes arguments for the C runtime, reports a declined prompt as `Error::Cancelled`, owns the process handle so the app can wait for the exit code, and reports whether the running process is elevated.
+- Add `app-paths`, the path guard for apps that delete or move files. `is_safe_path` accepts a path only when it lies strictly inside a trusted root with no link or reparse point on the way. It rejects `..`, names that Win32 trims or reads as a device or stream, and paths that `std::path::absolute` reads differently. `overlap` follows links to tell whether two folders overlap.
+- Build with Rust 1.100.0.
+- Check the crates with `handsomefox/app-workflows` 0.2.0.
+
 ## 0.2.3
 
 - Keep the staged update's lock while it is read and swapped in. The install used to release the lock to read the file, and a second copy of the app starting in that moment could delete the download, so the install failed.

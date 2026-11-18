@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "app-diagnostics"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "jiff",
  "tempfile",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "app-elevation"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "thiserror",
  "windows-sys 0.61.2",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "app-folders"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "tempfile",
  "tracing",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "app-instance"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -70,21 +70,21 @@ dependencies = [
 
 [[package]]
 name = "app-paths"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "app-process"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "app-update"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "app-instance",
  "flate2",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "app-update-ui"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "app-update",
  "egui",
