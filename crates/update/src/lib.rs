@@ -1111,26 +1111,35 @@ pub fn request_restart(executable: &Path) {
 /// the same app, `CREATE_NO_WINDOW` keeps the new copy's console from
 /// flashing up; Windows ignores the flag for window-subsystem programs.
 ///
+/// The new process is marked with [`app_instance::hand_off`], so its
+/// [`app_instance::acquire`] waits for this process to exit instead of
+/// treating it as another running copy.
+///
 /// # Errors
 /// Returns an error when the new process cannot be started.
 pub fn restart_if_requested() -> io::Result<()> {
     let executable = RESTART.lock().ok().and_then(|mut restart| restart.take());
     if let Some(executable) = executable {
         tracing::info!(path = %executable.display(), "restarting into the updated app");
-        let mut command = std::process::Command::new(executable);
-        command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        command.spawn()?;
+        restart_command(&executable).spawn()?;
     }
     Ok(())
+}
+
+fn restart_command(executable: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    app_instance::hand_off(&mut command);
+    command
 }
 
 enum Message {
@@ -1793,6 +1802,56 @@ mod tests {
             let release = latest(Some(digest.clone()));
             assert!(!release.installable(), "{digest:?}");
             assert_eq!(release.archive, None, "{digest:?}");
+        }
+    }
+
+    #[test]
+    fn the_restart_hands_the_instance_lock_to_the_new_copy() {
+        let executable = Path::new("tool.exe");
+        let command = restart_command(executable);
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
+        let mut marked = std::process::Command::new(executable);
+        app_instance::hand_off(&mut marked);
+        assert!(command.get_envs().eq(marked.get_envs()));
+        #[cfg(windows)]
+        assert_eq!(command.get_envs().count(), 1);
+    }
+
+    #[test]
+    fn a_malformed_sums_digest_makes_the_release_uninstallable() {
+        let latest = |digest: Option<String>| {
+            let mut release =
+                api_release("v1.3.0", &["tool-1.3.0-windows-x86_64.zip", "SHA256SUMS"]);
+            release.assets[1].digest = digest;
+            select_update(
+                &APP,
+                version("1.2.3"),
+                Some("windows-x86_64"),
+                vec![release],
+            )
+            .unwrap()
+            .latest()
+            .clone()
+        };
+        let release = latest(Some(format!("sha256:{}", "cd".repeat(32))));
+        assert!(release.installable());
+        assert_eq!(release.sums.unwrap().digest, Some([0xcd; 32]));
+        for digest in [None, Some(String::new())] {
+            let release = latest(digest);
+            assert!(release.installable());
+            assert_eq!(release.sums.unwrap().digest, None);
+        }
+        for digest in [
+            "cd".repeat(32),
+            format!("sha512:{}", "cd".repeat(32)),
+            format!("sha256:{}", "cd".repeat(31)),
+            format!("sha256:{}", "zz".repeat(32)),
+        ] {
+            let release = latest(Some(digest.clone()));
+            assert!(!release.installable(), "{digest:?}");
+            assert_eq!(release.sums, None, "{digest:?}");
+            assert!(release.archive.is_some(), "{digest:?}");
         }
     }
 

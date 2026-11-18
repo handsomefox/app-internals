@@ -1,0 +1,20 @@
+[package]
+name = "app-elevation"
+description = "Start a program with administrator rights through the UAC prompt, and wait for it"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Win32_System_Registry gates SHELLEXECUTEINFOW, Win32_Security the token
+# query, and Win32_System_Threading the process calls.
+windows-sys = { workspace = true, features = ["Win32_Security", "Win32_System_Registry", "Win32_System_Threading"] }
+
+[lints]
+workspace = true

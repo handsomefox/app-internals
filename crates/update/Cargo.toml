@@ -11,6 +11,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+app-instance.workspace = true
 flate2.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

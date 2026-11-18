@@ -43,12 +43,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-elevation"
+version = "0.2.3"
+dependencies = [
+ "thiserror",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "app-folders"
 version = "0.2.3"
 dependencies = [
  "tempfile",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "app-instance"
+version = "0.2.3"
+dependencies = [
+ "thiserror",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "app-paths"
+version = "0.2.3"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
@@ -62,6 +86,7 @@ dependencies = [
 name = "app-update"
 version = "0.2.3"
 dependencies = [
+ "app-instance",
  "flate2",
  "reqwest",
  "rustls",

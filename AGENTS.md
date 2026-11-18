@@ -20,6 +20,8 @@ The tag format, the archive name and layout, the `SHA256SUMS` lookup, and the ch
 
 Do not weaken a check: hashes, digests, size caps, link filtering, or the extraction path checks.
 
+`app-instance` holds a contract between versions too. An update's restart sets `APP_INSTANCE_HANDOFF` in the new process, and every version must find the lock named `Local\app-instance.<id>.lock` that an earlier version holds. Renaming either lets an updated copy exit or run beside the old one.
+
 `Settings` and `CheckPeriod` are saved by each app with its own state. Keep their serde shape, so existing users' settings still load with the same meaning.
 
 `APP_UPDATE_PRETEND_VERSION` must work only in debug builds.
@@ -48,7 +50,7 @@ CI cannot reach a real release or a real window. Before you tag a change, run a 
 
 ## Release a change
 
-1. Add a `## <version>` section to `CHANGELOG.md`, and set `version` in `[workspace.package]` and the `app-update` entry in `[workspace.dependencies]` to match.
+1. Add a `## <version>` section to `CHANGELOG.md`, and set `version` in `[workspace.package]` and the `app-instance` and `app-update` entries in `[workspace.dependencies]` to match.
 2. Push to `main` and wait for green CI.
 3. Push an annotated `v<version>` tag on that commit, and create a GitHub release from the changelog section.
 4. In each of the five apps, bump the `tag` and `version` of every crate from here, under one commit subject shared by all five, with Windows Toolkit first. Release each app as usual.

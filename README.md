@@ -18,6 +18,9 @@ Rust crates that these desktop apps share, so none of them keeps its own copy:
 | `app-diagnostics` | `crates/diagnostics` | Daily log files with a 10 MiB daily cap, seven days kept, and a panic hook that logs the panic. |
 | `app-folders` | `crates/folders` | The Windows known folders, with an environment fallback, the app's own data folder, and opening a folder in the system file manager. |
 | `app-process` | `crates/process` | Whether a process with a given executable name is running. It finds processes by name only and never opens a handle to one. |
+| `app-instance` | `crates/instance` | One running copy per app. A second launch brings the first copy's window to the front and exits. |
+| `app-elevation` | `crates/elevation` | Starts a program with administrator rights through the UAC prompt, and waits for its exit code. |
+| `app-paths` | `crates/paths` | Whether a path lies strictly inside a trusted folder with no link on the way, and whether two folders overlap once links are followed. |
 
 Every crate has the same version, and one tag releases all of them.
 
@@ -27,6 +30,7 @@ Every crate has the same version, and one tag releases all of them.
 - The archive must match its line in the release's `SHA256SUMS` asset. When GitHub records a digest for the archive or for `SHA256SUMS`, each file must match its digest too. A release whose GitHub digests cannot be read is not offered.
 - Downloads are size-capped, and only links inside the app's own GitHub releases are followed.
 - The new executable is extracted next to the running one under a name of its own, and hashed again before the swap. The copy of the app that downloaded it holds a lock on it until then, so another copy starting up leaves it alone. Windows cannot overwrite a running executable, so the swap renames the running file aside first. If the swap fails, the original is put back. The next start removes what is left.
+- The restarted copy is marked with `app_instance::hand_off`, so it waits for the old copy to release the instance lock instead of exiting as a second copy.
 
 ## The release layout
 
@@ -48,6 +52,9 @@ app-update-ui = { git = "https://github.com/handsomefox/app-internals", tag = "v
 app-diagnostics = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
 app-folders = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
 app-process = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
+app-instance = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
+app-elevation = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
+app-paths = { git = "https://github.com/handsomefox/app-internals", tag = "v0.2.3", version = "=0.2.3" }
 ```
 
 Start logging first, so a failure while the window opens still reaches the log:
@@ -56,6 +63,35 @@ Start logging first, so a failure while the window opens still reaches the log:
 let logs = app_folders::app_data_dir("win-toolkit").map(|dir| dir.join("logs"));
 app_diagnostics::init(logs.as_deref(), "win-toolkit", "info");
 ```
+
+Take the instance lock next, on the startup path that opens the window. A second launch exits here:
+
+```rust
+let instance = match app_instance::acquire("win-toolkit") {
+    Ok(app_instance::Instance::Primary(guard)) => Some(guard),
+    Ok(app_instance::Instance::Secondary) => return Ok(()),
+    // Run without the guard rather than refuse to start.
+    Err(error) => {
+        tracing::warn!(%error, "running without the single-instance lock");
+        None
+    }
+};
+
+// Once the window exists:
+if let Some(guard) = &instance {
+    let ctx = cc.egui_ctx.clone();
+    let watching = guard.on_activate(move || {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
+    });
+    if let Err(error) = watching {
+        tracing::warn!(%error, "a second launch will not bring this window forward");
+    }
+}
+```
+
+Keep the guard until `main` returns. An elevated helper, a monitor mode, or any other copy the app starts for a job of its own does not call `acquire`.
 
 Create one `Updater` for the window, call `poll` once per frame, and restart after the event loop ends:
 

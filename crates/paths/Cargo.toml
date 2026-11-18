@@ -1,0 +1,15 @@
+[package]
+name = "app-paths"
+description = "Whether a path lies inside a folder the app trusts, without following links, and whether two folders overlap"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
