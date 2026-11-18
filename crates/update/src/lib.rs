@@ -815,8 +815,7 @@ fn success(response: reqwest::blocking::Response) -> Result<reqwest::blocking::R
     }
     let message = response
         .json::<ApiError>()
-        .map(|error| error.message)
-        .unwrap_or_default();
+        .map_or_default(|error| error.message);
     let message: String = message.chars().take(200).collect();
     Err(Error::Status {
         status: status.as_u16(),
@@ -1656,7 +1655,7 @@ mod tests {
             parse_notes("#hashtag"),
             vec![NoteBlock::Paragraph("#hashtag".into())]
         );
-        assert!(parse_notes("\n\n").is_empty());
+        assert_eq!(parse_notes("\n\n"), Vec::new());
     }
 
     fn api_release(tag: &str, assets: &[&str]) -> ApiRelease {
